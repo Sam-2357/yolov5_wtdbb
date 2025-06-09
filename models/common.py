@@ -24,6 +24,7 @@ import torch.nn as nn
 from IPython.display import display
 from PIL import Image
 from torch.cuda import amp
+import torch.nn.functional as F
 
 from utils import TryExcept
 from utils.dataloaders import exif_transpose, letterbox
@@ -88,6 +89,23 @@ class TransformerLayer(nn.Module):
         x = self.fc2(self.fc1(x)) + x
         return x
 
+class WaveBranch(nn.Module):
+    """
+    Lightweight branch that learns to absorb repetitive wave texture.
+    Training-time only – removed before export.
+    """
+    def __init__(self, ch):
+        super().__init__()
+        # fixed 3×3 high-pass kernels approximating DWT
+        hp = torch.tensor([[[[-1, -1, -1],
+                             [-1,  8, -1],
+                             [-1, -1, -1]]]], dtype=torch.float32)
+        self.register_buffer('hp', hp.repeat(ch, 1, 1, 1))  # depth-wise
+        self.conv = nn.Conv2d(ch, ch, 3, padding=2, dilation=2,
+                              groups=ch, bias=False)
+    def forward(self, x):
+        x = F.conv2d(x, self.hp, padding=1, groups=x.size(1))
+        return self.conv(x)
 
 class TransformerBlock(nn.Module):
     # Vision Transformer https://arxiv.org/abs/2010.11929
