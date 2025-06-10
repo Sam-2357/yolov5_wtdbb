@@ -311,9 +311,9 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
               # ---- WaveBranch cosine-contrast term --------------------------
                 if model.training and hasattr(model, 'wave_feat') and hasattr(model, 'obj_feat'):
                     contrast = contrastive_cos(model.wave_feat, model.obj_feat)
-                    contrast = contrast.to(loss_items.device)           # ensure match
+                  #  contrast = contrast.to(loss_items.device)           # ensure match
                     loss += 0.05 * contrast                     # λ = 0.05
-                    loss_items = torch.cat([loss_items, contrast.unsqueeze(0)])
+                  #  loss_items = torch.cat([loss_items, contrast.unsqueeze(0)])
                 # ----------------------------------------------------------------   
                 if RANK != -1:
                     loss *= WORLD_SIZE  # gradient averaged between devices in DDP mode
@@ -372,7 +372,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
             stop = stopper(epoch=epoch, fitness=fi)  # early stop check
             if fi > best_fitness:
                 best_fitness = fi
-            log_vals = list(mloss) + list(results) + lr
+            log_vals = list(mloss) + list(results) + lr + [contrast_loss]
             callbacks.run('on_fit_epoch_end', log_vals, epoch, best_fitness, fi)
 
             # Save model
@@ -617,7 +617,7 @@ def main(opt, callbacks=Callbacks()):
             callbacks = Callbacks()
             # Write mutation results
             keys = ('metrics/precision', 'metrics/recall', 'metrics/mAP_0.5', 'metrics/mAP_0.5:0.95', 'val/box_loss',
-                    'val/obj_loss', 'val/cls_loss')
+                    'val/obj_loss', 'val/cls_loss', 'loss/contrast')
             print_mutation(keys, results, hyp.copy(), save_dir, opt.bucket)
 
         # Plot results
