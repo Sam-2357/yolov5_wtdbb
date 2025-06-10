@@ -22,6 +22,7 @@ if platform.system() != 'Windows':
     ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
 from models.common import *
+from models.common import WaveBranch 
 from models.experimental import *
 from utils.autoanchor import check_anchor_order
 from utils.general import LOGGER, check_version, check_yaml, make_divisible, print_args
@@ -118,7 +119,14 @@ class BaseModel(nn.Module):
                 x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
             if profile:
                 self._profile_one_layer(m, x, dt)
-            x = m(x)  # run
+            x = m(x)  # run          
+            
+            # ---- WT-DBB tap ---------------------------------
+            if self.training and m.i == 0 and not hasattr(self, 'wave_feat'):
+                self.wave_feat = self.wave_branch(x).detach()
+                self.obj_feat  = x.detach()
+            # -------------------------------------------------
+            
             y.append(x if m.i in self.save else None)  # save output
             if visualize:
                 feature_visualization(x, m.type, m.i, save_dir=visualize)
@@ -164,44 +172,71 @@ class BaseModel(nn.Module):
 
 class DetectionModel(BaseModel):
     # YOLOv5 detection model
-    def __init__(self, cfg='yolov5s.yaml', ch=3, nc=None, anchors=None):  # model, input channels, number of classes
+    def __init__(self, cfg='yolov5s.yaml', ch=3, nc=None, anchors=None):
         super().__init__()
+
+        # --------------------------------------------------------------- #
+        # ❶  LOAD YAML  (unchanged)                                       #
+        # --------------------------------------------------------------- #
         if isinstance(cfg, dict):
-            self.yaml = cfg  # model dict
+            self.yaml = cfg
         else:  # is *.yaml
-            import yaml  # for torch hub
+            import yaml
             self.yaml_file = Path(cfg).name
             with open(cfg, encoding='ascii', errors='ignore') as f:
-                self.yaml = yaml.safe_load(f)  # model dict
+                self.yaml = yaml.safe_load(f)
 
-        # Define model
-        ch = self.yaml['ch'] = self.yaml.get('ch', ch)  # input channels
+        # --------------------------------------------------------------- #
+        # ❷  CREATE BACKBONE + HEAD                                      #
+        # --------------------------------------------------------------- #
+        ch = self.yaml['ch'] = self.yaml.get('ch', ch)
         if nc and nc != self.yaml['nc']:
             LOGGER.info(f"Overriding model.yaml nc={self.yaml['nc']} with nc={nc}")
-            self.yaml['nc'] = nc  # override yaml value
+            self.yaml['nc'] = nc
         if anchors:
             LOGGER.info(f'Overriding model.yaml anchors with anchors={anchors}')
-            self.yaml['anchors'] = round(anchors)  # override yaml value
-        self.model, self.save = parse_model(deepcopy(self.yaml), ch=[ch])  # model, savelist
-        self.names = [str(i) for i in range(self.yaml['nc'])]  # default names
+            self.yaml['anchors'] = round(anchors)
+        self.model, self.save = parse_model(deepcopy(self.yaml), ch=[ch])
+        self.names = [str(i) for i in range(self.yaml['nc'])]
         self.inplace = self.yaml.get('inplace', True)
 
-        # Build strides, anchors
-        m = self.model[-1]  # Detect()
+        # --------------------------------------------------------------- #
+        # ❸  *** WAVE-BRANCH INSERT BEGINS ***                            #
+        #     Determine stem output channels and build the tiny branch   #
+        # --------------------------------------------------------------- #
+        if hasattr(self.model[0], "conv"):                     # Conv stem
+            first_channels = self.model[0].conv.out_channels
+        else:                                                  # Focus stem
+            first_channels = self.model[0].cv1.conv.out_channels
+
+        self.wave_branch = WaveBranch(first_channels)          # <<< ADD
+        # ---------------------  *** INSERT ENDS *** -------------------- #
+
+        # --------------------------------------------------------------- #
+        # ❹  BUILD STRIDES & ANCHORS  (unchanged)                         #
+        # --------------------------------------------------------------- #
+        m = self.model[-1]  # Detect()  or Segment()
         if isinstance(m, (Detect, Segment)):
-            s = 256  # 2x min stride
+            s = 256  # 2 × min stride
             m.inplace = self.inplace
-            forward = lambda x: self.forward(x)[0] if isinstance(m, Segment) else self.forward(x)
-            m.stride = torch.tensor([s / x.shape[-2] for x in forward(torch.zeros(1, ch, s, s))])  # forward
+            forward = (
+                lambda x: self.forward(x)[0]
+                if isinstance(m, Segment)
+                else self.forward(x)
+            )
+            m.stride = torch.tensor([s / x.shape[-2] for x in forward(torch.zeros(1, ch, s, s))])
             check_anchor_order(m)
             m.anchors /= m.stride.view(-1, 1, 1)
             self.stride = m.stride
-            self._initialize_biases()  # only run once
+            self._initialize_biases()
 
-        # Init weights, biases
+        # --------------------------------------------------------------- #
+        # ❺  INIT WEIGHTS  (unchanged)                                    #
+        # --------------------------------------------------------------- #
         initialize_weights(self)
         self.info()
         LOGGER.info('')
+
 
     def forward(self, x, augment=False, profile=False, visualize=False):
         if augment:
