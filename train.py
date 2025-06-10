@@ -372,7 +372,7 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
             stop = stopper(epoch=epoch, fitness=fi)  # early stop check
             if fi > best_fitness:
                 best_fitness = fi
-            log_vals = list(mloss) + list(results) + lr + [contrast_loss]
+            log_vals = list(mloss) + list(results) + lr 
             callbacks.run('on_fit_epoch_end', log_vals, epoch, best_fitness, fi)
 
             # Save model
@@ -617,7 +617,7 @@ def main(opt, callbacks=Callbacks()):
             callbacks = Callbacks()
             # Write mutation results
             keys = ('metrics/precision', 'metrics/recall', 'metrics/mAP_0.5', 'metrics/mAP_0.5:0.95', 'val/box_loss',
-                    'val/obj_loss', 'val/cls_loss', 'loss/contrast')
+                    'val/obj_loss', 'val/cls_loss')
             print_mutation(keys, results, hyp.copy(), save_dir, opt.bucket)
 
         # Plot results
