@@ -123,7 +123,7 @@ class BaseModel(nn.Module):
             
             # ---- WT-DBB tap ---------------------------------
             if self.training and m.i == 0 and not hasattr(self, 'wave_feat'):
-                self.wave_feat = self.wave_branch(x).detach()
+                self.wave_feat = self.wave_branch(x)
                 self.obj_feat  = x.detach()
             # -------------------------------------------------
             
@@ -229,6 +229,12 @@ class DetectionModel(BaseModel):
             m.anchors /= m.stride.view(-1, 1, 1)
             self.stride = m.stride
             self._initialize_biases()
+
+        # --- clean up stride-probe tensors so ModelEMA deepcopy works ----
+        if hasattr(self, 'wave_feat') and isinstance(self.wave_feat, torch.Tensor):
+            self.wave_feat = self.wave_feat.detach()
+        if hasattr(self, 'obj_feat') and isinstance(self.obj_feat, torch.Tensor):
+            self.obj_feat = self.obj_feat.detach()
 
         # --------------------------------------------------------------- #
         # ❺  INIT WEIGHTS  (unchanged)                                    #

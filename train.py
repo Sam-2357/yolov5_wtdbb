@@ -311,8 +311,8 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
               # ---- WaveBranch cosine-contrast term --------------------------
                 if model.training and hasattr(model, 'wave_feat') and hasattr(model, 'obj_feat'):
                     contrast = contrastive_cos(model.wave_feat, model.obj_feat)
+                    contrast = contrast.to(loss_items.device)           # ensure match
                     loss += 0.05 * contrast                     # λ = 0.05
-                    # (optional) append to items for CSV logging
                     loss_items = torch.cat([loss_items, contrast.unsqueeze(0)])
                 # ----------------------------------------------------------------   
                 if RANK != -1:
