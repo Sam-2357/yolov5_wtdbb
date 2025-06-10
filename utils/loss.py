@@ -5,9 +5,20 @@ Loss functions
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from utils.metrics import bbox_iou
 from utils.torch_utils import de_parallel
+
+def contrastive_cos(wave_feat: torch.Tensor, obj_feat: torch.Tensor) -> torch.Tensor:
+    """
+    Cosine-similarity penalty between wave branch and object backbone.
+    Expects tensors (B,C,H,W).  Returns scalar loss.
+    """
+    w = torch.mean(wave_feat.flatten(2), dim=2)   # (B,C)
+    o = torch.mean(obj_feat.flatten(2), dim=2)
+    cos = F.cosine_similarity(w, o, dim=1).abs()  # (B,)
+    return cos.mean()
 
 
 def smooth_BCE(eps=0.1):  # https://github.com/ultralytics/yolov3/issues/238#issuecomment-598028441

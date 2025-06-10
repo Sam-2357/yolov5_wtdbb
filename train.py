@@ -59,6 +59,7 @@ from utils.metrics import fitness
 from utils.plots import plot_evolve
 from utils.torch_utils import (EarlyStopping, ModelEMA, de_parallel, select_device, smart_DDP, smart_optimizer,
                                smart_resume, torch_distributed_zero_first)
+from utils.loss import ComputeLoss, contrastive_cos
 
 LOCAL_RANK = int(os.getenv('LOCAL_RANK', -1))  # https://pytorch.org/docs/stable/elastic/run.html
 RANK = int(os.getenv('RANK', -1))
@@ -307,6 +308,13 @@ def train(hyp, opt, device, callbacks):  # hyp is path/to/hyp.yaml or hyp dictio
             with torch.cuda.amp.autocast(amp):
                 pred = model(imgs)  # forward
                 loss, loss_items = compute_loss(pred, targets.to(device))  # loss scaled by batch_size
+              # ---- WaveBranch cosine-contrast term --------------------------
+                if model.training and hasattr(model, 'wave_feat') and hasattr(model, 'obj_feat'):
+                    contrast = contrastive_cos(model.wave_feat, model.obj_feat)
+                    loss += 0.05 * contrast                     # λ = 0.05
+                    # (optional) append to items for CSV logging
+                    loss_items = torch.cat([loss_items, contrast.unsqueeze(0)])
+                # ----------------------------------------------------------------   
                 if RANK != -1:
                     loss *= WORLD_SIZE  # gradient averaged between devices in DDP mode
                 if opt.quad:
