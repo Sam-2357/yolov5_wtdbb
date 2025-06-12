@@ -22,7 +22,7 @@ if platform.system() != 'Windows':
     ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
 from models.common import *
-from models.common import WaveBranch 
+from models.common import WaveBranch, MultiScaleWaveBranch, DirectionalWaveBranch
 from models.experimental import *
 from utils.autoanchor import check_anchor_order
 from utils.general import LOGGER, check_version, check_yaml, make_divisible, print_args
@@ -122,9 +122,14 @@ class BaseModel(nn.Module):
             x = m(x)  # run          
             
             # ---- WT-DBB tap ---------------------------------
-            if self.training and m.i == 0 and not hasattr(self, 'wave_feat'):
+            if (
+                self.training
+                and self.wave_branch is not None
+                and m.i == 0
+                and not hasattr(self, 'wave_feat')
+            ):
                 self.wave_feat = self.wave_branch(x)
-                self.obj_feat  = x.detach()
+                self.obj_feat = x.detach()
             # -------------------------------------------------
             
             y.append(x if m.i in self.save else None)  # save output
@@ -172,7 +177,8 @@ class BaseModel(nn.Module):
 
 class DetectionModel(BaseModel):
     # YOLOv5 detection model
-    def __init__(self, cfg='yolov5s.yaml', ch=3, nc=None, anchors=None):
+    def __init__(self, cfg='yolov5s.yaml', ch=3, nc=None, anchors=None,
+                 wave='single', wave_kwargs=None):
         super().__init__()
 
         # --------------------------------------------------------------- #
@@ -209,7 +215,15 @@ class DetectionModel(BaseModel):
         else:                                                  # Focus stem
             first_channels = self.model[0].cv1.conv.out_channels
 
-        self.wave_branch = WaveBranch(first_channels)          # <<< ADD
+        wb_args = wave_kwargs or {}
+        if wave == 'multi':
+            self.wave_branch = MultiScaleWaveBranch(first_channels, **wb_args)
+        elif wave == 'directional':
+            self.wave_branch = DirectionalWaveBranch(first_channels, **wb_args)
+        elif wave == 'none':
+            self.wave_branch = None
+        else:
+            self.wave_branch = WaveBranch(first_channels)
         # ---------------------  *** INSERT ENDS *** -------------------- #
 
         # --------------------------------------------------------------- #
@@ -307,8 +321,9 @@ Model = DetectionModel  # retain YOLOv5 'Model' class for backwards compatibilit
 
 class SegmentationModel(DetectionModel):
     # YOLOv5 segmentation model
-    def __init__(self, cfg='yolov5s-seg.yaml', ch=3, nc=None, anchors=None):
-        super().__init__(cfg, ch, nc, anchors)
+    def __init__(self, cfg='yolov5s-seg.yaml', ch=3, nc=None, anchors=None,
+                 wave='single', wave_kwargs=None):
+        super().__init__(cfg, ch, nc, anchors, wave, wave_kwargs)
 
 
 class ClassificationModel(BaseModel):
