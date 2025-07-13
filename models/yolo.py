@@ -366,6 +366,10 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
             if m in {BottleneckCSP, C3, C3TR, C3Ghost, C3x}:
                 args.insert(2, n)  # number of repeats
                 n = 1
+        elif m is WaveBranch:
+            # WaveBranch keeps channel count identical; prepend input channels to args
+            args = [ch[f], *args]
+            c2 = ch[f]
         elif m is nn.BatchNorm2d:
             args = [ch[f]]
         elif m is Concat:

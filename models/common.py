@@ -90,22 +90,60 @@ class TransformerLayer(nn.Module):
         return x
 
 class WaveBranch(nn.Module):
+    """Wavelet feature enrichment branch
+
+    Performs a single-level (undecimated) 2-D Discrete Wavelet Transform (DWT)
+    followed by lightweight convolutions that fuse wavelet information back into
+    the main stream.  Default wavelet is Daubechies-2.
     """
-    Lightweight branch that learns to absorb repetitive wave texture.
-    Training-time only – removed before export.
-    """
-    def __init__(self, ch):
+
+    def __init__(self, c1: int, wave: str = 'db2', k: int = 3):
         super().__init__()
-        # fixed 3×3 high-pass kernels approximating DWT
-        hp = torch.tensor([[[[-1, -1, -1],
-                             [-1,  8, -1],
-                             [-1, -1, -1]]]], dtype=torch.float32)
-        self.register_buffer('hp', hp.repeat(ch, 1, 1, 1))  # depth-wise
-        self.conv = nn.Conv2d(ch, ch, 3, padding=2, dilation=2,
-                              groups=ch, bias=False)
-    def forward(self, x):
-        x = F.conv2d(x, self.hp, padding=1, groups=x.size(1))
-        return self.conv(x)
+        self.c1 = c1
+
+        # --------------------------- Build filter bank ---------------------------
+        try:
+            import pywt  # optional dependency
+            wt = pywt.Wavelet(wave)
+            lo = torch.tensor(wt.dec_lo[::-1], dtype=torch.float32)  # reverse for conv correlation
+            hi = torch.tensor(wt.dec_hi[::-1], dtype=torch.float32)
+        except Exception:
+            # Hard-coded fallback for db2 (used if pywt missing)
+            if wave != 'db2':
+                raise ValueError(f"Unsupported wavelet '{wave}' without PyWavelets installed")
+            lo = torch.tensor([-0.129409522551, 0.224143868042,
+                               0.836516303738, 0.482962913145], dtype=torch.float32)
+            hi = torch.tensor([-0.482962913145, 0.836516303738,
+                               -0.224143868042, -0.129409522551], dtype=torch.float32)
+
+        # 2-D separable kernels (LL, LH, HL, HH)
+        kernels = torch.stack([
+            torch.outer(lo, lo),  # LL
+            torch.outer(lo, hi),  # LH
+            torch.outer(hi, lo),  # HL
+            torch.outer(hi, hi)   # HH
+        ], dim=0)  # (4, ks, ks)
+        ks = kernels.shape[-1]
+
+        weight = kernels.unsqueeze(1).repeat(c1, 1, 1, 1)  # (4*c1,1,ks,ks)
+        self.register_buffer('dwt_weight', weight)
+
+        # Depth-wise undecimated DWT
+        self.dwt = nn.Conv2d(c1, c1 * 4, ks, stride=1, padding=ks // 2,
+                             groups=c1, bias=False)
+        self.dwt.weight.data = weight
+        self.dwt.weight.requires_grad = False  # keep filters fixed
+
+        # 1×1 bottleneck to restore channel count
+        self.compress = Conv(c1 * 4, c1, k=1, s=1)
+        # Final fusion conv (defaults to 3×3)
+        self.fuse = Conv(c1 * 2, c1, k=k, s=1)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:  # noqa: D401
+        y = self.dwt(x)       # wavelet sub-bands
+        y = self.compress(y)  # channel reduction
+        return self.fuse(torch.cat((x, y), dim=1))
+
 
 class TransformerBlock(nn.Module):
     # Vision Transformer https://arxiv.org/abs/2010.11929
