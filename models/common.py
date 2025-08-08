@@ -145,6 +145,101 @@ class WaveBranch(nn.Module):
         return self.fuse(torch.cat((x, y), dim=1))
 
 
+
+class MultiScaleWaveBranch(nn.Module):
+    """WaveBranch variant using multiple Laplacian kernels."""
+
+    def __init__(self, ch, ksizes=(3, 5, 7)):
+        super().__init__()
+        self.kernels = []
+        self.pads = []
+
+        if 3 in ksizes:
+            hp3 = torch.tensor(
+                [[[-1, -1, -1],
+                  [-1, 8, -1],
+                  [-1, -1, -1]]],
+                dtype=torch.float32,
+            )
+            self.register_buffer("hp3", hp3.repeat(ch, 1, 1, 1))
+            self.kernels.append("hp3")
+            self.pads.append(1)
+
+        if 5 in ksizes:
+            hp5 = torch.tensor(
+                [
+                    [0, 0, -1, 0, 0],
+                    [0, -1, -2, -1, 0],
+                    [-1, -2, 16, -2, -1],
+                    [0, -1, -2, -1, 0],
+                    [0, 0, -1, 0, 0],
+                ],
+                dtype=torch.float32,
+            )
+            self.register_buffer("hp5", hp5[None].repeat(ch, 1, 1, 1))
+            self.kernels.append("hp5")
+            self.pads.append(2)
+
+        if 7 in ksizes:
+            hp7 = torch.tensor(
+                [
+                    [0, 0, 0, -1, 0, 0, 0],
+                    [0, 0, -1, -2, -1, 0, 0],
+                    [0, -1, -2, -3, -2, -1, 0],
+                    [-1, -2, -3, 48, -3, -2, -1],
+                    [0, -1, -2, -3, -2, -1, 0],
+                    [0, 0, -1, -2, -1, 0, 0],
+                    [0, 0, 0, -1, 0, 0, 0],
+                ],
+                dtype=torch.float32,
+            )
+            self.register_buffer("hp7", hp7[None].repeat(ch, 1, 1, 1))
+            self.kernels.append("hp7")
+            self.pads.append(3)
+
+        self.conv = nn.Conv2d(
+            ch * len(self.kernels), ch, 1, groups=ch, bias=False
+        )
+
+    def forward(self, x):
+        feats = []
+        for name, pad in zip(self.kernels, self.pads):
+            k = getattr(self, name)
+            feats.append(F.conv2d(x, k, padding=pad, groups=x.size(1)))
+        return self.conv(torch.cat(feats, 1))
+
+
+class DirectionalWaveBranch(nn.Module):
+    """WaveBranch variant using directional Sobel kernels."""
+
+    def __init__(self, ch, angles=(0, 45, 90, 135)):
+        super().__init__()
+        self.angles = angles
+        bank = torch.stack([self._sobel(a) for a in angles]).unsqueeze(1)
+        self.register_buffer("bank", bank.repeat(ch, 1, 1, 1))
+        self.conv = nn.Conv2d(
+            ch * len(angles), ch, 1, groups=ch, bias=False
+        )
+
+    @staticmethod
+    def _sobel(angle):
+        if angle == 0:
+            k = [[1, 0, -1], [2, 0, -2], [1, 0, -1]]
+        elif angle == 90:
+            k = [[1, 2, 1], [0, 0, 0], [-1, -2, -1]]
+        elif angle == 45:
+            k = [[0, 1, 2], [-1, 0, 1], [-2, -1, 0]]
+        elif angle == 135:
+            k = [[2, 1, 0], [1, 0, -1], [0, -1, -2]]
+        else:
+            raise ValueError(f"Unsupported angle {angle}")
+        return torch.tensor(k, dtype=torch.float32)
+
+    def forward(self, x):
+        c = x.size(1)
+        feat = F.conv2d(x, self.bank.repeat(c, 1, 1, 1), padding=1, groups=c)
+        return self.conv(feat)
+
 class TransformerBlock(nn.Module):
     # Vision Transformer https://arxiv.org/abs/2010.11929
     def __init__(self, c1, c2, num_heads, num_layers):
